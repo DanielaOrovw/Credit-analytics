@@ -1,0 +1,558 @@
+---
+title: "Predicting customers’ probability of default"
+author: "Daniela Orovwiroro"
+date: "7/2/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# Case Study for Data Scientist Role
+
+## NAD Marketing Insights and Analytics
+
+Credit lending involves any form of deferred payment extended by a creditor or credit facility to a debtor. This is an important business area for financial institutions. There is a risk that some customers may use their credit card beyond their repayment capabilities which would translate to high debt accumulation. Hence, there is need to identify the risky and non-risky customers and the potential of the customers to repay the debt. 
+This is a case study to use data on Consumer credit usage that contains credit line granted to a customer, their payment and balance history, demographics and their default status to predict customers’ probability of default. 
+
+Key Problems And Issues In The NAD Marketing Case Study
+Some consumers issued credit by the company have a history of payment defaults.
+
+Data on customers and their default status have been collected and this requires data processing 
+
+NAD may face risk exposure of some customers using their credit line beyond their repayment capabilities which would translate to high debt accumulation.
+
+Hence, there is need to identify and predict risky and non-risky customers and identify the potential of the customers to repay the debt. 
+
+
+## Step 1: Data Cleansing
+Data cleansing is important because  it involves the preparing of data for analysis by removing or modifying data that is incorrect, incomplete, irrelevant, duplicated, or improperly formatted. This improves the data quality, and this translates to overall productivity.
+Cleaning data by removing duplicates, marking missing values and  imputing missing values.
+```{r cars}
+# We will load the libraries
+library(tidyverse)  # data manipulation
+library(cluster)    # clustering algorithms
+library(factoextra) # clustering algorithms & visualization
+library(MASS)
+library(caret)   # Classification and Regression Training
+library(dplyr)   # A Grammar of Data Manipulation
+library(pROC)    # Display and Analyze ROC Curves
+library(lmtest)  # Testing Linear Regression Models
+library(e1071)   # Tuning of Functions Using Grid Search, Support Vector Machines
+library(sandwich)    # Robust Covariance Matrix Estimators
+library(rpart.plot)  # Decision Tree
+library(dummies)
+library(psych)
+library(corrplot)
+library(gridExtra)
+library(grid)
+library(lattice)
+library(sqldf)
+library(ROCR)
+library(gbm)
+
+# Set work directory
+setwd("C:/Users/Daniela Orovwiroro/Desktop/credit")
+# Import the credit dataset 
+credit = read.csv("data.csv",sep=",", header=TRUE, stringsAsFactors = FALSE)
+
+# Examine the imported credit dataset.
+dim(credit) 
+# Review the first 6 rows of credit dataset.
+head(credit)
+```
+
+```{r}
+#We will plot a bar chart showing the distribution of default customers. 
+ggplot(credit) + aes(x = as.factor(credit$Y)) + geom_bar(color="blue", fill="red")+theme_minimal()
+```
+
+From our review of the dataset we can see that the data has 24 variables and 30000 rows of data. We can also see that the data headers are not giving much insights on the data in the column. We will rename the headers of the dataset.
+```{r}
+# Rename the headers of the dataset
+credit= rename(credit, Credit_Amount = X1, Gender = X2, Education = X3, Marital_status = X4,
+               Age = X5,RepayS_0 = X6,RepayS_1 = X7, RepayS_2 = X8, RepayS_3 = X9,
+               RepayS_4 = X10, RepayS_5 = X11, BillS_0 = X12, BillS_1 = X13,
+               BillS_2 = X14, BillS_3 = X15,
+               BillS_4 = X16, BillS_5 = X17,
+               PrePay_0 = X18, PrePay_1 = X19,
+              PrePay_2 = X20, PrePay_3 = X21,
+                PrePay_4 = X22, PrePay_5 = X23,
+               Default= Y)
+data_c=credit
+# Review the first 6 rows of credit dataset.
+head(credit)
+# We check if the dataset has any missing values by checking rows of data  
+credit[!complete.cases(credit),]
+
+#Let's check if there are duplicated data
+dup_rows = duplicated(credit)
+dup_rows_num = sum(dup_rows)
+dup_rows_num
+
+#here we remove the duplicate datapoints
+credit = credit %>% distinct()
+```
+After renaming the header we will now further explore the data to see the relationship between various variables.
+
+
+## Step 2: Exploratory Data Analysis
+```{r}
+# We perform descriptive statistics to understand the distribution of the data
+describe(credit)
+```
+From the descriptive statistics we can see that 22% of the customers defaulted payment. Hence we will determine which variable to examine more closely by looking at its correlation with the target variable.
+
+```{r}
+# Correlation plot
+res = cor(credit)
+corrplot(res, type = "upper", order = "hclust", 
+         tl.col = "black", tl.srt = 45)
+```
+```{r}
+status_table = table(credit$Default)
+status_table
+#the percentage of people who default
+(status_table["1"]/(status_table["0"]+status_table["1"]))*100
+```
+From the data we can see 22.12% of the customers defaulted
+```{r}
+credit$Default=factor(credit$Default)
+# We will plot the distribution of credit default with age
+g_Age_1 = ggplot(credit, aes(x=Age )) + geom_histogram(bins=40)
+g_Age_2 = ggplot(credit, aes(x=Default, y=Age , col=Default)) + geom_boxplot()
+grid.arrange(g_Age_1, g_Age_2,ncol=2, top='Age distribution, outliers and Credit Default')
+```
+
+From the chart above we can see the distribution of the population is skewed to the right the mean is greater than the median. This implies that majority of the population in our dataset are younger in age. 
+```{r}
+# We will create bin for age
+credit$Gender= if_else( credit$Gender == "1", "M","F")
+credit$Gender=factor(credit$Gender)
+
+data = credit %>% 
+              mutate(Age_bin = ifelse(Age < 25, "-25", 
+                             ifelse(Age < 35, "25-34",        
+                             ifelse(Age < 45, "35-44", "45-")))
+                     )
+
+# Generate mosaic diagrams with Chi-Square tests
+library(vcd)
+# Plot mosaic diagram with Chi-Square tests
+mosaic(~ Age_bin + Default,data = data, shade=TRUE, legend=TRUE)
+```
+
+Based on our analysis we can see that customers under age 25 have the highest possibility of defaulting and age group 25 - 34 have the smallest possibility of defaulting.
+
+```{r}
+#We will plot the distribution of credit default with gender
+tab_Gender = table(credit$Gender, credit$Default)
+addmargins(tab_Gender)
+prop.table(tab_Gender,2)
+g_Gender_1 = ggplot(credit, aes(x=Gender, fill=Gender)) + geom_bar(position="dodge")
+g_Gender_2 = ggplot(credit, aes(x=Gender, fill=Default)) + geom_bar(position="fill")
+grid.arrange(g_Gender_1, g_Gender_2,ncol=2, top='Gender Profile of Default Payment Vs Non-Default')
+# Plot mosaic diagram with Chi-Square tests
+library(vcd)
+mosaic(~ Gender + Default,data = data, shade=TRUE, legend=TRUE)
+
+```
+
+Based on our analysis we can see that male customers have a higher probability of defaulting
+compared to the female customers.
+```{r}
+#Understand the customer demography
+credit$Education = if_else( credit$Education == "1", "Graduate_school",
+                            if_else( credit$Education == "2", "University",
+                                     if_else( credit$Education == "3", "High_school", "Others")))
+
+credit$Marital_status= if_else( credit$Marital_status == "1", "Married",
+                            if_else( credit$Marital_status == "2", "Single","Others"))
+
+```
+
+Here we will check the relationship between eduction and credit risk default
+```{r}
+# Plotting mosaic diagram with Chi-Square tests to understand the relationship between education and default
+mosaic(~ Education + Default,data = data, shade=TRUE, legend=TRUE)
+#Let's check:
+tab_education = table(credit$Default, credit$Education)
+addmargins(tab_education)
+#probability table
+prop.table(tab_education,2)
+library(ggplot2)
+g_Education_1=ggplot(credit, aes(x = Default)) + geom_bar(aes (fill = Education), position = "dodge") +ggtitle("Education Profile of Default Payment Vs Non-Default")+  xlab("")+ylab("Number of Individuals")
+
+g_Education_2=ggplot(credit, aes(x = Default)) + geom_bar(aes (fill = Education), position = "fill") + ggtitle("Education Profile of Default Payment Vs Non-Default")+  xlab("")+ylab("")
+
+grid.arrange(g_Education_1, g_Education_2, nrow=2)
+
+```
+
+Based on our analysis we can see a correlation between education and default.Customers with higher degrees have a lower probability of defaulting compared to customers with other degrees. It can be seen that people with graduate school degree have a 19% probability of defaulting which is lower than the default risk for university 23.7% and high school degree 25.2%. We can see from above bar chart that number of customers having university education is highest, followed by customers having graduate school and high school in both the categories.
+
+```{r}
+# Plot mosaic diagram with Chi-Square tests to understand the relationship between marital status and default
+mosaic(~ Marital_status+ Default,data = data, shade=TRUE, legend=TRUE)
+#Let's check:
+tab_marital_status = table(credit$Marital_status, credit$Default)
+addmargins(tab_marital_status)
+#probability table
+prop.table(tab_marital_status,2)
+
+g_marital_status_1=ggplot(credit, aes(x = Default)) + geom_bar(aes (fill = Marital_status), position = "dodge")+ xlab("")+ylab("Number of Individuals")
+
+g_marital_status_2=g_Gender_2 = ggplot(credit, aes(x=Marital_status, fill=Default)) + geom_bar(position="fill")
+
+
+grid.arrange(g_marital_status_1, g_marital_status_2, ncol=2,top='Marital status distribution and Credit Default implication')
+```
+
+Based on our analysis we can see that married customers have a higher probability of defaulting 
+when compared to the single customers.
+```{r}
+# We check the relationship between repayment status and the default with Chi-Square tests
+mosaic(~ RepayS_1 + Default,data = data, shade=TRUE, legend=TRUE)
+
+#Let's see the distribution of History of past payment
+g_RepayS_0 = ggplot(credit, aes(x=RepayS_0, fill=RepayS_0)) + geom_bar(position="dodge")
+g_RepayS_1 = ggplot(credit, aes(x=RepayS_1, fill=RepayS_1)) + geom_bar(position="dodge")
+g_RepayS_2 = ggplot(credit, aes(x=RepayS_2, fill=RepayS_2)) + geom_bar(position="dodge")
+g_RepayS_3 = ggplot(credit, aes(x=RepayS_3, fill=RepayS_3)) + geom_bar(position="dodge")
+g_RepayS_4 = ggplot(credit, aes(x=RepayS_4, fill=RepayS_4)) + geom_bar(position="dodge")
+g_RepayS_5 = ggplot(credit, aes(x=RepayS_5, fill=RepayS_5)) + geom_bar(position="dodge")
+grid.arrange(g_RepayS_0, g_RepayS_1,g_RepayS_2,g_RepayS_3,g_RepayS_4,g_RepayS_5,ncol=3, nrow = 2, top='History of past payment distribution')
+```
+
+This chart gives a history of past monthly payment records (from April to September, 2005) for the customers. It can be seen that any customers pay their liability as at when due but there are customers who have payment delay of 2 months and above. Customers who have delayed payment of at least 1 month in any of the previous months, have an increased  chance of default.
+
+
+## Step 3: Feature engineering and selection
+Feature engineering is the combining of different attributes and variables in the dataset to get more value. In general, an engineered feature may be easier for a machine learning algorithm to digest and make rules from than the variables it was derived from.
+```{r}
+head(credit)
+# We look at the classes of the education
+ed_table= credit %>% dplyr::select(Education, Default) %>% table()
+
+prop_results = as_tibble(prop.table(ed_table,1))
+prop_results
+```
+It can be seen that customers with only high school degree and university degree has a higher probability of defaulting compared to customers who went to graduate school and others.
+
+
+```{r}
+#We will bucket the age 
+credit %>% dplyr::select(Age) %>% summary()
+# We will use sequnce function to generate age buckets
+credit =credit %>% mutate(age_cat = cut(Age, breaks = seq(20,80, by =10)))
+ggplot(credit, aes(x=age_cat, y=Credit_Amount)) + geom_point()
+```
+
+```{r}
+#We will bucket the Credit amount using quantile bucketing to generate credit limit buckets
+credit_new=credit
+credit_new %>% dplyr::select(Credit_Amount) %>% summary()
+credit_new=credit_new %>% mutate(credit_lim = ntile(Credit_Amount, 5)) 
+ggplot(credit_new, aes(x=credit_lim, y=Credit_Amount)) +
+    geom_point()
+
+
+sqldf("select credit_lim, min(Credit_Amount),max(Credit_Amount) from credit_new group by credit_lim")
+```
+```{r}
+#Create a new variable to calculate average repayment status
+credit_new$Average_Repay_S= (credit_new$RepayS_0+credit_new$RepayS_1+ credit_new$RepayS_2 + credit_new$RepayS_3 + credit_new$RepayS_4 + credit_new$RepayS_5)/6
+# Running or cumulative sum of bill amount - payment amount for each individual
+credit_new$Amount_owed = credit_new$BillS_0 + credit_new$BillS_1 + credit_new$BillS_2 + credit_new$BillS_3 + credit_new$BillS_4 + credit_new$BillS_5 - credit$PrePay_0 - credit$PrePay_1 - credit$PrePay_2 - credit$PrePay_3 - credit$PrePay_4 - credit$PrePay_5
+
+#Mean value of Amount owed over a 6 month period
+credit_new$AVG_6MTH_BAL = credit_new$Amount_owed/6
+
+#Average 6 month balance divided by the individual’s credit limit
+credit_new$Bal_Lim_Ratio= round(credit_new$AVG_6MTH_BAL/credit_new$Credit_Amount,3)
+
+data=credit_new
+data$Gender= as.factor(data$Gender)
+data$Education = as.factor(data$Education)
+data$RepayS_0=as.factor(data$RepayS_0)
+data$RepayS_1=as.factor(data$RepayS_1)
+data$RepayS_2=as.factor(data$RepayS_2)
+data$RepayS_3=as.factor(data$RepayS_3)
+data$RepayS_4=as.factor(data$RepayS_4)
+data$RepayS_5=as.factor(data$RepayS_5)
+data$Marital_status= as.factor(data$Marital_status)
+data$age_cat = as.factor(data$age_cat)
+data$Age=NULL
+data$Credit_Amount=NULL
+```
+One-Hot Encoding
+We converted categorical variables into a form of  binary variable for each unique integer value where we applied algorithms to do predictions.
+```{r}
+# Hot encoding: dummify the data
+credit_new = dummy.data.frame(credit_new, names=c("Gender","Education", "Marital_status", "credit_lim"), sep="_")
+
+credit_new = dummy.data.frame(credit_new, names=c("age_cat"), sep="_")
+```
+
+## Step 4: Modeling
+```{r}
+new_credit=credit_new
+new_credit$Credit_Amount= NULL
+new_credit$Age= NULL
+# We hold data back to have something to test the model on. We use data that was not used in the model
+in_train = createDataPartition(data$Default, p=0.8, list = FALSE)
+
+training = data[in_train,]
+testing = data[-in_train,]
+ 
+
+# METHOD 1: Logistic Regression
+# Fit logit model on all variables:
+log_reg_mod = glm(Default ~ ., training, family = "binomial")
+summary(log_reg_mod)
+
+data$AVG_6MTH_BAL=NULL
+data$Average_Repay_S=NULL
+data$Amount_owed=NULL
+data$credit_lim= NULL
+```
+#### METHOD 1: Logistic regression
+Logistic regression is used for classification tasks which uses a linear equation with independent predictors to predict a value. The predicted value can be anywhere between negative infinity to positive infinity
+```{r}
+# We hold data back to have something to test the model on. We use data that was not used in the model
+in_train = createDataPartition(data$Default, p=0.8, list = FALSE)
+# Use 80% of data to training and testing the models
+training = data[in_train,]
+
+# Select the remaining 30% of the data for validati
+testing = data[-in_train,]
+
+# Run algorithms using 10-fold cross validation
+control = trainControl(method="repeatedcv", number=10, repeats=3)
+metricTarget = "Accuracy"
+
+
+# METHOD 1: Logistic Regression
+# Fit logit model on all variables:
+fit.glm = train(Default~., data=training, method="glm", metric=metricTarget, trControl=control)
+fit.glm$results
+glm.predictions = predict(fit.glm, newdata=testing)
+confusionMatrix(glm.predictions, testing$Default)
+```
+AccuracySD gives us an estimate of the uncertainty in our accuracy estimate.To obtain test accuracy, we will need to make predictions on the test data. With the object returned by train(), this is extremely easy.
+
+```{r}
+######Predictions on test dataset
+glm.predictions = predict(fit.glm, newdata=testing)
+confusionMatrix(glm.predictions, testing$Default)
+```
+#### METHOD 2:Naïve Bayes Classifier
+Naive Bayes (NB) is a very simple algorithm based on conditional probability and counting.The Naïve Bayes classifier is a simple probabilistic classifier which is based on Bayes theorem but with strong assumptions regarding independence. It classifies given different instances (object/data) into predefined classes (groups), assuming there is no interdependency of features (class conditional independence).
+```{r}
+NBclassfier = naiveBayes(Default ~ ., data=training,metric=metricTarget, trControl=control)
+######Predictions on test dataset
+pred = predict(NBclassfier, newdata = testing)
+
+confusionMatrix(pred, testing$Default)
+```
+#### METHOD 3: Stochastic Gradient Boosting 
+Gradient boosting is a machine learning technique for regression and classification problems, which produces a prediction model in the form of an ensemble of weak prediction models, typically decision trees. Boosting is an ensemble technique that attempts to create a strong classifier from a number of weak classifiers. This model builds trees one at a time, where each new tree helps to correct errors made by previously trained tree.The idea of boosting is to train weak learners sequentially, each trying to correct its predecessor.
+```{r}
+# METHOD 3: Stochastic Gradient Boosting 
+GBM.model = train(Default~., data=training, method="gbm", metric=metricTarget, trControl=control)
+######Predictions on test dataset
+gbm.predictions = predict(GBM.model, newdata=testing)
+confusionMatrix(gbm.predictions, testing$Default)
+```
+#### METHOD 4:Linear Discriminant Analysis
+Linear Discriminant Analysis is a supervised classification technique which takes labels into consideration. The goal of Linear Discriminant Analysis is to project the features in higher dimension space onto a lower dimensional space.
+```{r}
+# # METHOD 4:Linear Discriminant Analysis with Jacknifed Prediction 
+# Fit the model
+LDA.model = train(Default~., data=training, method="lda", metric=metricTarget, trControl=control)
+# Make predictions
+lda.predictions = LDA.model %>% predict(testing)
+# Model accuracy
+confusionMatrix(testing$Default, lda.predictions)
+```
+#### METHOD 5:Decision Tree: 
+Decision Trees are broadly used supervised models for classification and regression tasks. A decision tree can be used to visually and explicitly represent decisions and decision making.
+
+```{r}
+# # METHOD 5:Decision Tree:
+# Fit the model
+model2 = train(Default~., data = training, method = "rpart",metric=metricTarget, trControl=control)
+# Make predictions
+dt.predictions =model2 %>% predict(testing)
+
+# Model confusion matrix
+confusionMatrix(testing$Default, dt.predictions)
+```
+
+```{r}
+### Compare the predictive models
+preds_list =resamples(list( LDA=LDA.model, DT=model2,  GLM=fit.glm, GBM=GBM.model))
+summary(preds_list)
+```
+```{r}
+# dot plots of accuracy
+scales = list(x=list(relation="free"), y=list(relation="free"))
+dotplot(preds_list, scales=scales)
+```
+
+#### Model selection
+After modelling the data I chose the best model based on the minimum value of False Negative because I want to predict customers who will default hence there is need to choose a model that has a higher probability of predicting a default 
+```{r}
+pred = prediction(as.numeric(gbm.predictions), as.numeric(testing$Default))
+perf = performance(pred, measure = "tpr", x.measure = "fpr")
+plot(perf, colorize=TRUE)
+```
+```{r}
+auc = performance(pred, measure = "auc")
+auc = auc@y.values[[1]]
+auc
+```
+
+## 5: Business insights and segmentation of customers
+```{r}
+head(data_c)
+
+# Running or cumulative sum of bill amount - payment amount for each individual
+data_c$Amount_owed = data_c$BillS_0 + data_c$BillS_1 + data_c$BillS_2 + data_c$BillS_3 + data_c$BillS_4 + data_c$BillS_5 - data_c$PrePay_0 - data_c$PrePay_1 - data_c$PrePay_2 - data_c$PrePay_3 - data_c$PrePay_4 - credit$PrePay_5
+
+#Mean value of AMT_OWED over a 6 month period
+data_c$AVG_6MTH_BAL = data_c$Amount_owed/6
+
+#Average 6 month balance divided by the individual’s credit limit
+data_c$Bal_Lim_Ratio= round(data_c$AVG_6MTH_BAL/data_c$Credit_Amount,3)
+data_c = data_c[, -c(12:23)] # delete columns 5 through 7
+head(data_c)
+```
+
+```{r}
+# Customer segmentation
+data_c$Default=as.numeric(data_c$Default)
+df = scale(data_c)
+head(df)
+```
+```{r}
+#K means clustering
+km.res = kmeans(df, 5, nstart = 25)
+str(km.res)
+fviz_cluster(km.res, data = df,
+             ellipse.type = "convex",
+             palette = "jco",
+             ggtheme = theme_minimal())
+```
+```{r}
+k3 = kmeans(df, centers = 3, nstart = 25)
+k4 = kmeans(df, centers = 4, nstart = 25)
+k5 = kmeans(df, centers = 5, nstart = 25)
+k2 = kmeans(df, centers = 2, nstart = 25)
+# plots to compare
+p1 = fviz_cluster(k2, geom = "point", data = df) + ggtitle("k = 2")
+p2 = fviz_cluster(k3, geom = "point",  data = df) + ggtitle("k = 3")
+p3 = fviz_cluster(k4, geom = "point",  data = df) + ggtitle("k = 4")
+p4 = fviz_cluster(k5, geom = "point",  data = df) + ggtitle("k = 5")
+
+grid.arrange(p1, p2, p3, p4, nrow = 2)
+```
+```{r}
+#using elbow method to determine the number of clusters
+set.seed(123)
+
+# function to compute total within-cluster sum of square 
+wss = function(k) {
+  kmeans(df, k, nstart = 10 )$tot.withinss
+}
+
+# Compute and plot wss for k = 1 to k = 15
+k.values = 1:15
+
+# extract wss for 2-15 clusters
+wss_values = map_dbl(k.values, wss)
+
+plot(k.values, wss_values,
+       type="b", pch = 19, frame = FALSE, 
+       xlab="Number of clusters K",
+       ylab="Total within-clusters sum of squares")
+```
+```{r}
+# Compute k-means clustering with k = 4
+set.seed(123)
+final = kmeans(df, 4, nstart = 25)
+fviz_cluster(final, data = df)
+```
+```{r}
+new = data_c %>%
+  mutate(Cluster = final$cluster)
+new$Cluster=as.numeric(new$Cluster)
+
+ggplot(new, aes(x=Cluster, fill=Gender)) + geom_bar(position="dodge")
+```
+
+Group 1 – Middle age low default customers
+
+• Balanced mix of married and single customers with average age of 37 years
+
+• Pay their credit liability when due
+
+• Customers in this group have high credit liability
+```{r}
+cluster1= sqldf("select * from new where Cluster=1")
+summary(cluster1)
+```
+
+Group 2 – Young university graduates low default customers
+
+• Mostly single female customers with average age of 34 years
+
+• Pay their credit liability when due and have a low default rate
+
+• Customers in this segment have a university degree and higher degrees
+```{r}
+cluster2= sqldf("select * from new where Cluster=2")
+summary(cluster2)
+```
+
+Group 3 – Late paying high default customers
+
+• Single and married customers with average age of 35 years
+
+•Highest percentage of defaulters above 70%
+
+• Have an average of 2 months payment delay and have a high default rate
+```{r}
+cluster3= sqldf("select * from new where Cluster=3")
+summary(cluster3)
+```
+
+Group 4 – Higher degree low debt customers
+
+• Balanced mix of married and single customers with average age of 37 years
+
+• Pay their credit liability early
+
+• Customers in this segment have low credit liability
+
+• Customers in this segment have a university degree and higher degrees
+```{r}
+cluster4= sqldf("select * from new where Cluster=4")
+summary(cluster4)
+```
+```{r}
+seq(20,80, by =10)
+new =new %>% mutate(age_cat = cut(Age, breaks = seq(20,80, by =10)))
+
+new =new %>% mutate(credit_lim = cut(Credit_Amount, breaks = seq(1,1000000, by =50000)))
+write.csv(new, "segment.csv")
+```
+
+Conclusion
+
+We have performed data cleaning, exploration and visualization of the dataset to identify key drivers and their relationship with default rate (Y). 
+
+We have trained and tested 5 machine learning models decision tree, Gradient boosting, Naïve Bayes, Linear Discriminant Analysis and logistic regression models  to predict the customers’ probability of default.
+
+We have derived business insights and given recommendations to improve the business.
+
